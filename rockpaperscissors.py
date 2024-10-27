@@ -1,124 +1,154 @@
+import random
 import cv2
 import mediapipe as mp
-import random
 import time
+import numpy as np
+
+cap = cv2.VideoCapture(0)
+cap.set(3, 640)
+cap.set(4, 480)
 
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
-hands = mp_hands.Hands(max_num_hands=1)
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.5)
 
-player_score = 0
-computer_score = 0
-round_time = 5  
-start_time = 0
-game_state = "waiting"  
+timer = 0
+stateResult = False
+startGame = False
+scores = [0, 0]  
+TIMER_DURATION = 3  
+currentAIImage = None  
+currentRandomNumber = None  
 
-def classify_gesture(landmarks):
-    thumb_tip = landmarks[mp_hands.HandLandmark.THUMB_TIP].x
-    index_tip = landmarks[mp_hands.HandLandmark.INDEX_FINGER_TIP].y
-    middle_tip = landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y
-    ring_tip = landmarks[mp_hands.HandLandmark.RING_FINGER_TIP].y
-    pinky_tip = landmarks[mp_hands.HandLandmark.PINKY_TIP].y
+def overlay_transparent(background, overlay, x, y):
+    """Helper function to properly overlay transparent PNG images"""
+    if overlay.shape[2] != 4:
+        return background
     
-    if (index_tip > landmarks[mp_hands.HandLandmark.INDEX_FINGER_PIP].y and
-        middle_tip > landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y and
-        ring_tip > landmarks[mp_hands.HandLandmark.RING_FINGER_PIP].y and
-        pinky_tip > landmarks[mp_hands.HandLandmark.PINKY_PIP].y):
-        return "Rock"
+    overlay_image = overlay[:, :, :3]
+    mask = overlay[:, :, 3:] / 255.0
     
-    elif (index_tip < landmarks[mp_hands.HandLandmark.INDEX_FINGER_PIP].y and
-          middle_tip < landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y and
-          ring_tip < landmarks[mp_hands.HandLandmark.RING_FINGER_PIP].y and
-          pinky_tip < landmarks[mp_hands.HandLandmark.PINKY_PIP].y):
-        return "Paper"
-    
-    elif (index_tip < landmarks[mp_hands.HandLandmark.INDEX_FINGER_PIP].y and
-          middle_tip < landmarks[mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y and
-          ring_tip > landmarks[mp_hands.HandLandmark.RING_FINGER_PIP].y and
-          pinky_tip > landmarks[mp_hands.HandLandmark.PINKY_PIP].y):
-        return "Scissors"
-    
-    return None
+    h, w = overlay_image.shape[:2]
+    section = background[y:y+h, x:x+w]
 
-def determine_winner(player_choice, computer_choice):
-    if player_choice == computer_choice:
-        return "Tie"
-    elif (player_choice == "Rock" and computer_choice == "Scissors") or \
-         (player_choice == "Paper" and computer_choice == "Rock") or \
-         (player_choice == "Scissors" and computer_choice == "Paper"):
-        return "Player Wins"
-    else:
-        return "Computer Wins"
+    masked_section = section * (1 - mask)
+    masked_overlay = overlay_image * mask
+    
+    background[y:y+h, x:x+w] = masked_section + masked_overlay
+    
+    return background
 
-cap = cv2.VideoCapture(0)
+def load_and_resize_image(path, target_size=None):
+    """Load and resize image while preserving transparency"""
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise ValueError(f"Failed to load image: {path}")
+    if target_size:
+        img = cv2.resize(img, target_size, interpolation=cv2.INTER_AREA)
+    return img
 
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        print("Failed to grab frame")
-        break
-
-    frame = cv2.flip(frame, 1)  
-    h, w, _ = frame.shape
-    
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(frame_rgb)
-    
-    current_time = time.time()
-    
-    if game_state == "waiting":
-        cv2.putText(frame, "Show your hand to start", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        if results.multi_hand_landmarks:
-            start_time = current_time
-            game_state = "playing"
-    
-    elif game_state == "playing":
-        remaining_time = round_time - (current_time - start_time)
-        cv2.putText(frame, f"Time: {max(0, int(remaining_time))}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+while True:
+    try:
+        imgBG = cv2.imread("BG.png")
+        if imgBG is None:
+            raise ValueError("Failed to load background image")
         
-        if remaining_time <= 0:
-            game_state = "result"
-            player_choice = None
-            if results.multi_hand_landmarks:
-                hand_landmarks = results.multi_hand_landmarks[0]
-                player_choice = classify_gesture(hand_landmarks.landmark)
-            computer_choice = random.choice(["Rock", "Paper", "Scissors"])
-        
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-    
-    elif game_state == "result":
-        if player_choice:
-            cv2.putText(frame, f"Player: {player_choice}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        else:
-            cv2.putText(frame, "Player: No gesture detected", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-        cv2.putText(frame, f"Computer: {computer_choice}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-        if player_choice:
-            result = determine_winner(player_choice, computer_choice)
-            cv2.putText(frame, result, (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+        success, img = cap.read()
+        if not success:
+            print("Failed to grab frame")
+            continue
             
-            if result == "Player Wins":
-                player_score += 1
-            elif result == "Computer Wins":
-                computer_score += 1
-        else:
-            cv2.putText(frame, "Computer Wins", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
-            computer_score += 1
+        # Flip the camera horizontally to fix mirror effect
+        img = cv2.flip(img, 1)
         
-        cv2.putText(frame, f"Player Score: {player_score}", (10, 190), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
-        cv2.putText(frame, f"Computer Score: {computer_score}", (10, 230), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        # Resize and crop camera input
+        imgScaled = cv2.resize(img, (0, 0), None, 0.875, 0.875)
+        imgScaled = imgScaled[:, 80:480]
         
-        if current_time - start_time > round_time + 3: 
-            game_state = "waiting"
-    
+        # Convert to RGB for Mediapipe
+        imgRGB = cv2.cvtColor(imgScaled, cv2.COLOR_BGR2RGB)
+        results = hands.process(imgRGB)
 
-    cv2.imshow('Rock-Paper-Scissors Game', frame)
-    
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        if startGame:
+            if not stateResult:
+                timer = TIMER_DURATION - (time.time() - initialTime)
+                if timer >= 0:
+                    cv2.putText(imgBG, str(int(timer)), (605, 435), 
+                              cv2.FONT_HERSHEY_PLAIN, 6, (255, 0, 255), 4)
+                
+                if timer <= 0:
+                    stateResult = True
+                    timer = 0
+                    playerMove = None
 
+                    if results.multi_hand_landmarks:
+                        hand_landmarks = results.multi_hand_landmarks[0]
+                        
+                        fingers = []
+                        
+                        thumb_tip = hand_landmarks.landmark[4].x
+                        thumb_base = hand_landmarks.landmark[2].x
+                        fingers.append(thumb_tip < thumb_base)
+                        for tip in [8, 12, 16, 20]:
+                            tip_y = hand_landmarks.landmark[tip].y
+                            pip_y = hand_landmarks.landmark[tip - 2].y
+                            fingers.append(tip_y < pip_y)
+                        
+                        if sum(fingers) == 0: 
+                            playerMove = 1
+                        elif sum(fingers) >= 4:  
+                            playerMove = 2
+                        elif sum(fingers) == 2 and fingers[1] and fingers[2]:  
+                            playerMove = 3
+
+                        currentRandomNumber = random.randint(1, 3)
+                        try:
+                            currentAIImage = load_and_resize_image(f"{currentRandomNumber}.png", (200, 200))
+                        except Exception as e:
+                            print(f"Error loading AI move image: {e}")
+
+                        if playerMove is not None:
+                            if playerMove == currentRandomNumber:  
+                                pass
+                            elif ((playerMove == 1 and currentRandomNumber == 3) or 
+                                  (playerMove == 2 and currentRandomNumber == 1) or 
+                                  (playerMove == 3 and currentRandomNumber == 2)):
+                                scores[1] += 1  
+                            else:
+                                scores[0] += 1 
+
+        if currentAIImage is not None:
+            imgBG = overlay_transparent(imgBG, currentAIImage, 149, 310)
+
+        h, w = imgScaled.shape[:2]
+        imgBG[234:234+h, 795:795+w] = imgScaled
+        cv2.putText(imgBG, str(scores[0]), (410, 215), 
+                    cv2.FONT_HERSHEY_PLAIN, 4, (255, 255, 255), 6)
+        cv2.putText(imgBG, str(scores[1]), (1112, 215), 
+                    cv2.FONT_HERSHEY_PLAIN, 4, (255, 255, 255), 6)
+
+        # Show image
+        cv2.imshow("Rock Paper Scissors", imgBG)
+
+        key = cv2.waitKey(1)
+        if key == ord('s'):
+            startGame = True
+            initialTime = time.time()
+            stateResult = False
+            currentAIImage = None  
+            currentRandomNumber = None
+        elif key == ord('r'):  
+            scores = [0, 0]
+            startGame = False
+            currentAIImage = None  
+            currentRandomNumber = None
+        elif key == ord('q'):  
+            break
+
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        continue
+
+# Clean up
 cap.release()
 cv2.destroyAllWindows()
