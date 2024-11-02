@@ -64,7 +64,7 @@ while True:
         # Resize and crop camera input
         imgScaled = cv2.resize(img, (0, 0), None, 0.875, 0.875)
         imgScaled = imgScaled[:, 80:480]
-        
+         
         # Convert to RGB for Mediapipe
         imgRGB = cv2.cvtColor(imgScaled, cv2.COLOR_BGR2RGB)
         results = hands.process(imgRGB)
